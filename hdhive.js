@@ -1,11 +1,12 @@
 // @name HDHive影视资源
 // @push 1
 // @author HDHive
-// @description HDHive影视资源爬虫脚本，支持电影/电视剧浏览、搜索、资源获取，解锁资源会消耗积分
-// @version 1.0.0
+// @description HDHive影视资源爬虫脚本，支持电影/电视剧浏览、搜索、资源获取，支持播放解锁
+// @version 1.0.1
 // @dependencies axios
 
 const axios = require("axios");
+const OmniBox = require("omnibox_sdk");
 
 // ========== 配置 ==========
 // 请将下面的地址替换为你的 Hugging Face Space 实际地址
@@ -177,13 +178,11 @@ async function home(params, context) {
 
 /**
  * 分类 - 支持电影和电视剧的多种筛选
- * 参数格式：movie|popular 或 tv|cn 等
  */
 async function category(params, context) {
     const categoryId = params.categoryId || params.id || "movie|popular";
     const page = Number(params.page || 1);
     
-    // 解析分类ID：格式为 "类型|分类"
     const parts = categoryId.split("|");
     const type = parts[0] || "movie";
     let subId = parts[1] || "popular";
@@ -192,25 +191,20 @@ async function category(params, context) {
         let requestParams = { type: type, page: page };
         
         if (type === "movie") {
-            // 检查是否是主分类
             if (MOVIE_CATEGORIES[subId]) {
                 requestParams.category = subId;
             } else if (MOVIE_REGIONS[subId]) {
-                // 地区筛选
                 requestParams.filters = { region: subId };
             } else if (subId.startsWith("year_")) {
-                // 年份筛选
                 const year = subId.replace("year_", "");
                 requestParams.filters = { year: parseInt(year) };
             } else if (MOVIE_GENRES[subId]) {
-                // 类型筛选
                 const genreId = parseInt(subId.replace("movie_genre_", ""));
                 requestParams.filters = { genres: [genreId] };
             } else {
                 requestParams.category = "popular";
             }
         } else {
-            // 电视剧
             if (TV_CATEGORIES[subId]) {
                 requestParams.category = subId;
             } else if (TV_REGIONS[subId]) {
@@ -307,13 +301,12 @@ async function detail(params, context) {
         return { list: [] };
     }
     
-    // 解析 videoId：格式为 "类型_ID"
     const parts = videoId.split("_");
     if (parts.length < 2) {
         return { list: [] };
     }
     
-    const mediaType = parts[0];  // movie 或 tv
+    const mediaType = parts[0];
     const tmdbId = parts[1];
     
     try {
@@ -332,13 +325,12 @@ async function detail(params, context) {
         const freeResources = resources.filter(r => (r.unlock_points || 0) === 0 || r.is_free_for_user === true);
         const paidResources = resources.filter(r => (r.unlock_points || 0) > 0 && !r.is_free_for_user);
         
-        // 获取影片基本信息（从第一个资源中提取标题）
+        // 获取影片基本信息
         let vodName = "";
         let vodContent = "";
         
         if (resources.length > 0) {
             const firstResource = resources[0];
-            // 尝试从资源标题中提取影片名
             if (firstResource.title) {
                 vodName = firstResource.title;
             } else if (firstResource.name) {
@@ -351,6 +343,7 @@ async function detail(params, context) {
             vodName = `${mediaType === "movie" ? "电影" : "电视剧"} ID: ${tmdbId}`;
         }
         
+        // 使用 OmniBox SDK 生成唯一播放标识
         if (freeResources.length > 0) {
             playSources.push({
                 name: "🎁 免费资源",
@@ -359,7 +352,9 @@ async function detail(params, context) {
                     playId: JSON.stringify({
                         slug: r.slug,
                         points: r.unlock_points || 0,
-                        type: "free"
+                        type: "free",
+                        tmdbId: tmdbId,
+                        mediaType: mediaType
                     })
                 }))
             });
@@ -373,13 +368,14 @@ async function detail(params, context) {
                     playId: JSON.stringify({
                         slug: r.slug,
                         points: r.unlock_points || 0,
-                        type: "paid"
+                        type: "paid",
+                        tmdbId: tmdbId,
+                        mediaType: mediaType
                     })
                 }))
             });
         }
         
-        // 如果没有任何资源，添加一个提示
         if (playSources.length === 0) {
             playSources.push({
                 name: "📭 暂无资源",
@@ -414,7 +410,6 @@ async function detail(params, context) {
 
 /**
  * 播放 - 解锁资源获取真实播放地址
- * playId 格式：JSON字符串包含 slug 和 points
  */
 async function play(params, context) {
     const playId = params.playId || "";
@@ -436,7 +431,7 @@ async function play(params, context) {
         try {
             playData = JSON.parse(playId);
         } catch (e) {
-            // 如果不是 JSON，可能是旧格式
+            // 如果不是 JSON，尝试作为纯 slug 处理
             playData = { slug: playId, points: 0, type: "free" };
         }
         
@@ -453,6 +448,8 @@ async function play(params, context) {
             };
         }
         
+        console.log(`解锁资源: slug=${slug}, points=${points}`);
+        
         // 调用解锁接口
         const resp = await axios.post(`${BASE_URL}/api/cache/unlock`, {
             slug: slug,
@@ -464,8 +461,8 @@ async function play(params, context) {
         
         const data = resp.data;
         
+        // 检查 API 冷却
         if (data.code === "OPENAPI_COOLDOWN") {
-            // API 冷却中，返回提示
             const waitSeconds = data.retry_after_seconds || 60;
             return {
                 urls: [],
@@ -476,9 +473,22 @@ async function play(params, context) {
             };
         }
         
+        // 提取真实链接
         const link = data.link || data.data?.full_url || data.data?.url || data.url;
         
         if (link) {
+            console.log(`解锁成功: ${link}`);
+            // 添加播放历史记录
+            try {
+                await OmniBox.addPlayHistory({
+                    vodId: playData.tmdbId || "",
+                    title: playData.title || "",
+                    episode: slug
+                });
+            } catch (e) {
+                // 忽略历史记录错误
+            }
+            
             return {
                 urls: [{ name: "播放", url: link }],
                 flag: flag,
@@ -487,6 +497,7 @@ async function play(params, context) {
             };
         } else {
             const errorMsg = data.error || data.msg || "解锁失败，未获取到链接";
+            console.error(`解锁失败: ${errorMsg}`);
             return {
                 urls: [],
                 flag: flag,
@@ -497,6 +508,10 @@ async function play(params, context) {
         }
     } catch (error) {
         console.error("play error:", error.message);
+        if (error.response) {
+            console.error("响应状态:", error.response.status);
+            console.error("响应数据:", error.response.data);
+        }
         return {
             urls: [],
             flag: flag,
