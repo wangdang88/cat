@@ -2,7 +2,7 @@
 // @push 1
 // @author HDHive
 // @description HDHive影视资源 - 115网盘专版，支持电视剧剧集
-// @version 2.0.0
+// @version 2.0.1
 // @dependencies axios
 
 const axios = require("axios");
@@ -49,7 +49,7 @@ async function getAllVideoFiles(shareURL, files) {
     return videoFiles;
 }
 
-// ========== 分类（只保留电影和电视剧）==========
+// ========== 分类 ==========
 async function home(params, context) {
     const classes = [
         { type_id: "movie", type_name: "🎬 电影", type_pid: "0" },
@@ -157,7 +157,7 @@ async function search(params, context) {
     }
 }
 
-// ========== 详情：获取资源列表，每个资源作为独立线路 ==========
+// ========== 详情：每个资源作为独立线路 ==========
 async function detail(params, context) {
     const videoId = params.videoId || "";
     
@@ -196,96 +196,29 @@ async function detail(params, context) {
             vodName = `${mediaType === "movie" ? "电影" : "电视剧"} (暂无115资源)`;
         }
         
-        // 对于电影：直接显示资源，每个资源一个线路
-        // 对于电视剧：每个资源作为线路，线路内显示网盘中的所有视频文件
+        // 每个资源作为一个独立线路
         for (let i = 0; i < resources.length; i++) {
             const res = resources[i];
             const points = res.unlock_points || 0;
             const isFree = points === 0 || res.is_free_for_user === true;
-            let lineName = res.title || res.name || `资源${i + 1}`;
+            let lineName = res.title || res.name || `线路${i + 1}`;
             lineName = lineName.replace(/[\\/:*?"<>|]/g, "");
             
-            // 先解锁获取分享链接
-            const unlockResp = await axios.post(`${BASE_URL}/api/cache/unlock`, {
-                slug: res.slug,
-                allow_points: true
-            }, {
-                headers: { "Content-Type": "application/json" },
-                timeout: 30000
-            });
-            
-            const unlockData = unlockResp.data;
-            
-            if (unlockData.code === "OPENAPI_COOLDOWN") {
-                console.log(`[HDHive] API冷却，跳过资源: ${res.slug}`);
-                continue;
-            }
-            
-            const shareUrl = unlockData.link || unlockData.data?.full_url || unlockData.data?.url || unlockData.url;
-            
-            if (!shareUrl) {
-                console.log(`[HDHive] 未获取到分享链接，跳过: ${res.slug}`);
-                continue;
-            }
-            
-            console.log(`[HDHive] 获取到分享链接: ${shareUrl}`);
-            
-            // 获取网盘文件列表
-            let episodes = [];
-            
-            try {
-                const fileList = await OmniBox.getDriveFileList(shareUrl, "0");
-                
-                if (fileList && fileList.files && fileList.files.length > 0) {
-                    // 获取所有视频文件
-                    const videoFiles = await getAllVideoFiles(shareUrl, fileList.files);
-                    
-                    if (videoFiles.length > 0) {
-                        // 按文件名排序
-                        videoFiles.sort((a, b) => {
-                            const nameA = (a.file_name || "").toLowerCase();
-                            const nameB = (b.file_name || "").toLowerCase();
-                            return nameA.localeCompare(nameB);
-                        });
-                        
-                        // 构建剧集列表
-                        for (let j = 0; j < videoFiles.length; j++) {
-                            const file = videoFiles[j];
-                            let fileName = file.file_name || `第${j + 1}集`;
-                            
-                            // 尝试提取集数编号
-                            let episodeNum = j + 1;
-                            const numMatch = fileName.match(/(\d+)/);
-                            if (numMatch) {
-                                episodeNum = parseInt(numMatch[1]);
-                            }
-                            const epMatch = fileName.match(/第(\d+)集/);
-                            if (epMatch) {
-                                episodeNum = parseInt(epMatch[1]);
-                            }
-                            
-                            episodes.push({
-                                name: `第${episodeNum}集 ${fileName}`,
-                                playId: `${shareUrl}|${file.fid}`
-                            });
-                        }
-                    }
-                }
-            } catch (e) {
-                console.log(`[HDHive] 获取文件列表失败: ${e.message}`);
-                // 如果获取文件失败，至少提供一个播放入口
-                episodes = [{
+            // 构造 playId，让播放时再解锁（避免详情页解锁）
+            // 这样详情页不会消耗积分，只有点击播放时才解锁
+            playSources.push({
+                name: isFree ? `🎁 ${lineName}` : `💎 ${lineName} (${points}积分)`,
+                episodes: [{
                     name: "播放",
-                    playId: shareUrl
-                }];
-            }
-            
-            if (episodes.length > 0) {
-                playSources.push({
-                    name: isFree ? `🎁 ${lineName}` : `💎 ${lineName} (${points}积分)`,
-                    episodes: episodes
-                });
-            }
+                    playId: JSON.stringify({
+                        slug: res.slug,
+                        points: points,
+                        type: mediaType,
+                        tmdbId: tmdbId,
+                        lineName: lineName
+                    })
+                }]
+            });
         }
         
         if (playSources.length === 0) {
@@ -309,7 +242,7 @@ async function detail(params, context) {
     }
 }
 
-// ========== 播放 ==========
+// ========== 播放：解锁并获取文件列表 ==========
 async function play(params, context) {
     const playId = params.playId || "";
     const flag = params.flag || "";
@@ -319,48 +252,112 @@ async function play(params, context) {
     }
     
     try {
-        // 解析 playId 格式：shareURL|fileId
-        const parts = playId.split("|");
-        let shareUrl = parts[0];
-        const fileId = parts[1];
+        // 解析 playId
+        let playData;
+        try {
+            playData = JSON.parse(playId);
+        } catch (e) {
+            playData = { slug: playId, points: 0 };
+        }
         
-        // 如果没有 fileId，说明是分享链接，需要自动查找视频文件
-        if (!fileId && shareUrl) {
-            // 获取文件列表
-            const fileList = await OmniBox.getDriveFileList(shareUrl, "0");
-            if (fileList && fileList.files) {
-                const videoFiles = await getAllVideoFiles(shareUrl, fileList.files);
-                if (videoFiles.length > 0) {
-                    const firstVideo = videoFiles[0];
-                    const firstFileId = firstVideo.fid || firstVideo.file_id;
-                    if (firstFileId) {
-                        const playInfo = await OmniBox.getDriveVideoPlayInfo(shareUrl, firstFileId);
-                        if (playInfo && playInfo.url && playInfo.url.length > 0) {
-                            return {
-                                urls: playInfo.url,
-                                flag: shareUrl,
-                                header: playInfo.header || {},
-                                parse: playInfo.parse || 0
-                            };
-                        }
-                    }
-                }
+        const slug = playData.slug;
+        
+        if (!slug) {
+            return { urls: [], flag: flag, header: {}, parse: 0 };
+        }
+        
+        console.log(`[HDHive] 解锁资源: ${slug}`);
+        
+        // 调用解锁接口获取分享链接
+        const unlockResp = await axios.post(`${BASE_URL}/api/cache/unlock`, {
+            slug: slug,
+            allow_points: true
+        }, {
+            headers: { "Content-Type": "application/json" },
+            timeout: 30000
+        });
+        
+        const unlockData = unlockResp.data;
+        
+        if (unlockData.code === "OPENAPI_COOLDOWN") {
+            return { urls: [], flag: flag, header: {}, parse: 0, msg: "API冷却中" };
+        }
+        
+        const shareUrl = unlockData.link || unlockData.data?.full_url || unlockData.data?.url || unlockData.url;
+        
+        if (!shareUrl) {
+            return { urls: [], flag: flag, header: {}, parse: 0, msg: "未获取到分享链接" };
+        }
+        
+        console.log(`[HDHive] 分享链接: ${shareUrl}`);
+        
+        // 获取网盘文件列表
+        const fileList = await OmniBox.getDriveFileList(shareUrl, "0");
+        
+        if (!fileList || !fileList.files || fileList.files.length === 0) {
+            return { urls: [], flag: shareUrl, header: {}, parse: 0, msg: "网盘中没有文件" };
+        }
+        
+        // 获取所有视频文件
+        const videoFiles = await getAllVideoFiles(shareUrl, fileList.files);
+        
+        if (videoFiles.length === 0) {
+            return { urls: [], flag: shareUrl, header: {}, parse: 0, msg: "未找到视频文件" };
+        }
+        
+        // 按文件名排序
+        videoFiles.sort((a, b) => {
+            const nameA = (a.file_name || "").toLowerCase();
+            const nameB = (b.file_name || "").toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
+        
+        // 构建剧集列表
+        const episodes = [];
+        for (let i = 0; i < videoFiles.length; i++) {
+            const file = videoFiles[i];
+            let fileName = file.file_name || `第${i + 1}集`;
+            const fileId = file.fid || file.file_id;
+            
+            // 尝试提取集数
+            let episodeNum = i + 1;
+            const numMatch = fileName.match(/(\d+)/);
+            if (numMatch) {
+                episodeNum = parseInt(numMatch[1]);
             }
-            return { urls: [], flag: shareUrl, header: {}, parse: 0 };
+            const epMatch = fileName.match(/第(\d+)集/);
+            if (epMatch) {
+                episodeNum = parseInt(epMatch[1]);
+            }
+            
+            episodes.push({
+                name: `第${episodeNum}集 ${fileName}`,
+                playId: `${shareUrl}|${fileId}`
+            });
         }
         
-        // 有 fileId，直接播放
-        const playInfo = await OmniBox.getDriveVideoPlayInfo(shareUrl, fileId);
-        
-        if (!playInfo || !playInfo.url || playInfo.url.length === 0) {
-            return { urls: [], flag: shareUrl, header: {}, parse: 0 };
+        // 如果只有一集，直接返回播放地址而不是剧集列表
+        if (episodes.length === 1) {
+            const singleFile = videoFiles[0];
+            const singleFileId = singleFile.fid || singleFile.file_id;
+            const playInfo = await OmniBox.getDriveVideoPlayInfo(shareUrl, singleFileId);
+            if (playInfo && playInfo.url && playInfo.url.length > 0) {
+                return {
+                    urls: playInfo.url,
+                    flag: shareUrl,
+                    header: playInfo.header || {},
+                    parse: playInfo.parse || 0
+                };
+            }
         }
         
+        // 多集：返回剧集列表
         return {
-            urls: playInfo.url,
+            urls: [],
             flag: shareUrl,
-            header: playInfo.header || {},
-            parse: playInfo.parse || 0
+            header: {},
+            parse: 1,
+            episodes: episodes
         };
         
     } catch (error) {
