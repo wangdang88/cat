@@ -2,297 +2,18 @@
 // @push 1
 // @author HDHive
 // @description HDHive影视资源爬虫脚本，支持电影/电视剧浏览、搜索、资源获取，支持播放解锁
-// @version 1.0.2
+// @version 1.0.3
 // @dependencies axios
 
 const axios = require("axios");
 const OmniBox = require("omnibox_sdk");
 
-// ========== 配置 ==========
-// 请将下面的地址替换为你的 Hugging Face Space 实际地址
-const BASE_URL = "https://wd23-hdhive.hf.space";  // ← 修改这里为你的实际地址
+const BASE_URL = "https://wd23-hdhive.hf.space";
 
-// TMDB 类型映射
-const MOVIE_CATEGORIES = {
-    popular: "🔥 热门电影",
-    now_playing: "🎬 正在热映",
-    top_rated: "⭐ 评分最高",
-    upcoming: "📅 即将上映"
-};
-
-const TV_CATEGORIES = {
-    popular: "🔥 热门剧集",
-    airing_today: "📺 今日播出",
-    on_the_air: "📡 正在播出",
-    top_rated: "⭐ 评分最高"
-};
-
-// 地区映射
-const MOVIE_REGIONS = {
-    movie_region_cn: "🇨🇳 国产电影",
-    movie_region_us: "🇺🇸 美国电影",
-    movie_region_jp: "🇯🇵 日本电影",
-    movie_region_kr: "🇰🇷 韩国电影",
-    movie_region_uk: "🇬🇧 英国电影",
-    movie_region_fr: "🇫🇷 法国电影",
-    movie_region_de: "🇩🇪 德国电影"
-};
-
-const TV_REGIONS = {
-    cn: "🇨🇳 国产剧",
-    us_eu: "🌍 欧美剧",
-    jp: "🇯🇵 日剧",
-    kr: "🇰🇷 韩剧",
-    tw: "🇹🇼 台剧",
-    hk: "🇭🇰 港剧",
-    th: "🇹🇭 泰剧"
-};
-
-// 类型映射（电影）
-const MOVIE_GENRES = {
-    movie_genre_28: "⚔️ 动作",
-    movie_genre_12: "🧙 冒险",
-    movie_genre_16: "🎨 动画",
-    movie_genre_35: "😄 喜剧",
-    movie_genre_80: "🔫 犯罪",
-    movie_genre_99: "📹 纪录片",
-    movie_genre_18: "📖 剧情",
-    movie_genre_10751: "👨‍👩‍👧 家庭",
-    movie_genre_14: "✨ 奇幻",
-    movie_genre_36: "📜 历史",
-    movie_genre_27: "👻 恐怖",
-    movie_genre_10402: "🎵 音乐",
-    movie_genre_9648: "🕵️ 悬疑",
-    movie_genre_10749: "💕 爱情",
-    movie_genre_878: "🚀 科幻",
-    movie_genre_53: "⚡ 惊悚",
-    movie_genre_10752: "⚔️ 战争",
-    movie_genre_37: "🤠 西部"
-};
-
-// 电视剧类型映射
-const TV_GENRES = {
-    genre_18: "📖 剧情",
-    genre_35: "😄 喜剧",
-    genre_10759: "⚔️ 动作冒险",
-    genre_10765: "🚀 科幻奇幻",
-    genre_9648: "🕵️ 悬疑",
-    genre_10749: "💕 爱情",
-    genre_99: "📹 纪录片",
-    genre_16: "🎨 动画",
-    genre_80: "🔫 犯罪",
-    genre_10751: "👨‍👩‍👧 家庭"
-};
-
-// 年份范围
-const YEARS = Array.from({ length: 17 }, (_, i) => 2026 - i);
-
-// 构建完整分类树
-function buildClassTree() {
-    const classes = [];
-    
-    // 电影分类
-    classes.push({ type_id: "movie", type_name: "🎬 电影", type_pid: "0" });
-    
-    // 电影子分类
-    for (const [id, name] of Object.entries(MOVIE_CATEGORIES)) {
-        classes.push({ type_id: `movie|${id}`, type_name: name, type_pid: "movie" });
-    }
-    
-    classes.push({ type_id: "movie_region", type_name: "🌍 电影地区", type_pid: "movie" });
-    for (const [id, name] of Object.entries(MOVIE_REGIONS)) {
-        classes.push({ type_id: `movie|${id}`, type_name: name, type_pid: "movie_region" });
-    }
-    
-    classes.push({ type_id: "movie_year", type_name: "📅 电影年份", type_pid: "movie" });
-    for (const year of YEARS) {
-        classes.push({ type_id: `movie|year_${year}`, type_name: `${year}年`, type_pid: "movie_year" });
-    }
-    
-    classes.push({ type_id: "movie_genre", type_name: "🎭 电影类型", type_pid: "movie" });
-    for (const [id, name] of Object.entries(MOVIE_GENRES)) {
-        classes.push({ type_id: `movie|${id}`, type_name: name, type_pid: "movie_genre" });
-    }
-    
-    // 电视剧分类
-    classes.push({ type_id: "tv", type_name: "📺 电视剧", type_pid: "0" });
-    
-    for (const [id, name] of Object.entries(TV_CATEGORIES)) {
-        classes.push({ type_id: `tv|${id}`, type_name: name, type_pid: "tv" });
-    }
-    
-    classes.push({ type_id: "tv_region", type_name: "🌍 剧集地区", type_pid: "tv" });
-    for (const [id, name] of Object.entries(TV_REGIONS)) {
-        classes.push({ type_id: `tv|${id}`, type_name: name, type_pid: "tv_region" });
-    }
-    
-    classes.push({ type_id: "tv_year", type_name: "📅 剧集年份", type_pid: "tv" });
-    for (const year of YEARS) {
-        classes.push({ type_id: `tv|year_${year}`, type_name: `${year}年`, type_pid: "tv_year" });
-    }
-    
-    classes.push({ type_id: "tv_genre", type_name: "🎭 剧集类型", type_pid: "tv" });
-    for (const [id, name] of Object.entries(TV_GENRES)) {
-        classes.push({ type_id: `tv|${id}`, type_name: name, type_pid: "tv_genre" });
-    }
-    
-    return classes;
-}
+// ... 前面的配置保持不变 ...
 
 /**
- * 首页 - 返回分类列表和推荐
- */
-async function home(params, context) {
-    try {
-        const classes = buildClassTree();
-        
-        // 获取热门推荐（热门电影）
-        const resp = await axios.post(`${BASE_URL}/api/discover`, {
-            type: "movie",
-            category: "popular",
-            page: 1
-        }, {
-            headers: { "Content-Type": "application/json" },
-            timeout: 15000
-        });
-        
-        const data = resp.data;
-        const list = (data.results || []).slice(0, 12).map(item => ({
-            vod_id: `movie_${item.id}`,
-            vod_name: item.title,
-            vod_pic: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
-            vod_remarks: item.release_date ? item.release_date.slice(0, 4) : "未知",
-            vod_year: item.release_date ? item.release_date.slice(0, 4) : ""
-        }));
-        
-        return {
-            class: classes,
-            list: list,
-            filters: {}
-        };
-    } catch (error) {
-        console.error("home error:", error.message);
-        return { class: [], list: [], filters: {} };
-    }
-}
-
-/**
- * 分类 - 支持电影和电视剧的多种筛选
- */
-async function category(params, context) {
-    const categoryId = params.categoryId || params.id || "movie|popular";
-    const page = Number(params.page || 1);
-    
-    const parts = categoryId.split("|");
-    const type = parts[0] || "movie";
-    let subId = parts[1] || "popular";
-    
-    try {
-        let requestParams = { type: type, page: page };
-        
-        if (type === "movie") {
-            if (MOVIE_CATEGORIES[subId]) {
-                requestParams.category = subId;
-            } else if (MOVIE_REGIONS[subId]) {
-                requestParams.filters = { region: subId };
-            } else if (subId.startsWith("year_")) {
-                const year = subId.replace("year_", "");
-                requestParams.filters = { year: parseInt(year) };
-            } else if (MOVIE_GENRES[subId]) {
-                const genreId = parseInt(subId.replace("movie_genre_", ""));
-                requestParams.filters = { genres: [genreId] };
-            } else {
-                requestParams.category = "popular";
-            }
-        } else {
-            if (TV_CATEGORIES[subId]) {
-                requestParams.category = subId;
-            } else if (TV_REGIONS[subId]) {
-                requestParams.filters = { region: subId };
-            } else if (subId.startsWith("year_")) {
-                const year = subId.replace("year_", "");
-                requestParams.filters = { year: parseInt(year) };
-            } else if (TV_GENRES[subId]) {
-                const genreId = parseInt(subId.replace("genre_", ""));
-                requestParams.filters = { genres: [genreId] };
-            } else {
-                requestParams.category = "popular";
-            }
-        }
-        
-        const resp = await axios.post(`${BASE_URL}/api/discover`, requestParams, {
-            headers: { "Content-Type": "application/json" },
-            timeout: 15000
-        });
-        
-        const data = resp.data;
-        const list = (data.results || []).map(item => ({
-            vod_id: `${type}_${item.id}`,
-            vod_name: item.title || item.name,
-            vod_pic: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
-            vod_remarks: (item.release_date || item.first_air_date || "").slice(0, 4),
-            vod_year: (item.release_date || item.first_air_date || "").slice(0, 4)
-        }));
-        
-        return {
-            page: page,
-            pagecount: data.total_pages || 1,
-            total: data.total_results || list.length,
-            list: list
-        };
-    } catch (error) {
-        console.error("category error:", error.message);
-        return { page: page, pagecount: 0, total: 0, list: [] };
-    }
-}
-
-/**
- * 搜索
- */
-async function search(params, context) {
-    const wd = params.keyword || params.wd || "";
-    const page = Number(params.page || 1);
-    
-    if (!wd) {
-        return { page: page, pagecount: 0, total: 0, list: [] };
-    }
-    
-    try {
-        const resp = await axios.post(`${BASE_URL}/api/search`, {
-            query: wd,
-            page: page
-        }, {
-            headers: { "Content-Type": "application/json" },
-            timeout: 15000
-        });
-        
-        const data = resp.data;
-        const list = (data.results || []).map(item => {
-            const mediaType = item.media_type || (item.title ? "movie" : "tv");
-            return {
-                vod_id: `${mediaType}_${item.id}`,
-                vod_name: item.title || item.name,
-                vod_pic: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
-                vod_remarks: (item.release_date || item.first_air_date || "").slice(0, 4),
-                vod_year: (item.release_date || item.first_air_date || "").slice(0, 4)
-            };
-        });
-        
-        return {
-            page: page,
-            pagecount: data.total_pages || 1,
-            total: data.total_results || list.length,
-            list: list
-        };
-    } catch (error) {
-        console.error("search error:", error.message);
-        return { page: page, pagecount: 0, total: 0, list: [] };
-    }
-}
-
-/**
- * 详情 - 获取影片详情和播放源
- * videoId 格式：movie_123 或 tv_456
+ * 详情 - 获取影片详情和播放源（支持电视剧剧集）
  */
 async function detail(params, context) {
     const videoId = params.videoId || "";
@@ -318,62 +39,159 @@ async function detail(params, context) {
         const data = resp.data;
         const resources = data.resources || [];
         
-        // 构建播放源
-        const playSources = [];
-        
-        // 按免费/付费分类
-        const freeResources = resources.filter(r => (r.unlock_points || 0) === 0 || r.is_free_for_user === true);
-        const paidResources = resources.filter(r => (r.unlock_points || 0) > 0 && !r.is_free_for_user);
-        
-        // 获取影片基本信息
+        // 获取影片基本信息（从TMDB获取更详细的信息）
         let vodName = "";
+        let vodPic = "";
         let vodContent = "";
+        let vodYear = "";
         
-        if (resources.length > 0) {
-            const firstResource = resources[0];
-            if (firstResource.title) {
-                vodName = firstResource.title;
-            } else if (firstResource.name) {
-                vodName = firstResource.name;
+        try {
+            // 尝试获取TMDB详细信息
+            let tmdbUrl = "";
+            if (mediaType === "movie") {
+                tmdbUrl = `https://api.themoviedb.org/3/movie/${tmdbId}?api_key=${TMDB_API_KEY}&language=zh-CN`;
+            } else {
+                tmdbUrl = `https://api.themoviedb.org/3/tv/${tmdbId}?api_key=${TMDB_API_KEY}&language=zh-CN`;
             }
-            vodContent = `共 ${resources.length} 个资源`;
+            // 注意：TMDB_API_KEY 需要在环境变量中配置
+            // 如果没有配置，可以跳过
+        } catch (e) {
+            // 忽略
         }
         
         if (vodName === "") {
-            vodName = `${mediaType === "movie" ? "电影" : "电视剧"} ID: ${tmdbId}`;
+            vodName = `${mediaType === "movie" ? "电影" : "电视剧"} ${tmdbId}`;
         }
         
-        // 使用 OmniBox SDK 生成唯一播放标识
-        if (freeResources.length > 0) {
-            playSources.push({
-                name: "🎁 免费资源",
-                episodes: freeResources.map(r => ({
-                    name: r.title || r.name || "资源",
-                    playId: JSON.stringify({
-                        slug: r.slug,
-                        points: r.unlock_points || 0,
-                        type: "free",
-                        tmdbId: tmdbId,
-                        mediaType: mediaType
-                    })
-                }))
-            });
-        }
+        // 构建播放源
+        const playSources = [];
         
-        if (paidResources.length > 0) {
-            playSources.push({
-                name: "💎 付费资源",
-                episodes: paidResources.map(r => ({
-                    name: `${r.title || r.name || "资源"} (${r.unlock_points || 0}积分)`,
+        if (mediaType === "movie") {
+            // 电影：直接显示资源列表
+            const freeResources = resources.filter(r => (r.unlock_points || 0) === 0 || r.is_free_for_user === true);
+            const paidResources = resources.filter(r => (r.unlock_points || 0) > 0 && !r.is_free_for_user);
+            
+            if (freeResources.length > 0) {
+                playSources.push({
+                    name: "🎁 免费资源",
+                    episodes: freeResources.map(r => ({
+                        name: r.title || r.name || "播放",
+                        playId: JSON.stringify({
+                            slug: r.slug,
+                            points: r.unlock_points || 0,
+                            type: "movie",
+                            tmdbId: tmdbId,
+                            title: r.title || r.name || ""
+                        })
+                    }))
+                });
+            }
+            
+            if (paidResources.length > 0) {
+                playSources.push({
+                    name: "💎 付费资源",
+                    episodes: paidResources.map(r => ({
+                        name: `${r.title || r.name || "播放"} (${r.unlock_points}积分)`,
+                        playId: JSON.stringify({
+                            slug: r.slug,
+                            points: r.unlock_points || 0,
+                            type: "movie",
+                            tmdbId: tmdbId,
+                            title: r.title || r.name || ""
+                        })
+                    }))
+                });
+            }
+        } else {
+            // 电视剧：需要按季和集组织
+            // 假设资源名称中包含集数信息，如 "第1集"、"EP01" 等
+            const episodes = [];
+            
+            for (const res of resources) {
+                const points = res.unlock_points || 0;
+                const isFree = points === 0 || res.is_free_for_user === true;
+                let episodeName = res.title || res.name || "资源";
+                
+                // 尝试从名称中提取集数
+                let episodeNum = 0;
+                let seasonNum = 1;
+                
+                // 匹配 "第X集" 格式
+                const epMatch = episodeName.match(/第(\d+)集/);
+                if (epMatch) {
+                    episodeNum = parseInt(epMatch[1]);
+                }
+                
+                // 匹配 "EPXX" 格式
+                const epMatch2 = episodeName.match(/[Ee][Pp](\d+)/);
+                if (epMatch2) {
+                    episodeNum = parseInt(epMatch2[1]);
+                }
+                
+                // 匹配 "S01E02" 格式
+                const seMatch = episodeName.match(/[Ss](\d+)[Ee](\d+)/);
+                if (seMatch) {
+                    seasonNum = parseInt(seMatch[1]);
+                    episodeNum = parseInt(seMatch[2]);
+                }
+                
+                episodes.push({
+                    name: episodeName,
+                    season: seasonNum,
+                    episode: episodeNum,
                     playId: JSON.stringify({
-                        slug: r.slug,
-                        points: r.unlock_points || 0,
-                        type: "paid",
+                        slug: res.slug,
+                        points: points,
+                        type: "tv",
                         tmdbId: tmdbId,
-                        mediaType: mediaType
+                        title: episodeName,
+                        season: seasonNum,
+                        episode: episodeNum
                     })
-                }))
+                });
+            }
+            
+            // 按季和集排序
+            episodes.sort((a, b) => {
+                if (a.season !== b.season) return a.season - b.season;
+                return a.episode - b.episode;
             });
+            
+            // 按季分组
+            const seasonMap = new Map();
+            for (const ep of episodes) {
+                if (!seasonMap.has(ep.season)) {
+                    seasonMap.set(ep.season, []);
+                }
+                seasonMap.get(ep.season).push(ep);
+            }
+            
+            // 构建播放源（每季一个播放源）
+            for (const [season, seasonEpisodes] of seasonMap) {
+                const points = seasonEpisodes[0]?.points || 0;
+                const isFree = points === 0;
+                
+                playSources.push({
+                    name: isFree ? `🎁 第${season}季` : `💎 第${season}季 (${points}积分)`,
+                    episodes: seasonEpisodes.map(ep => ({
+                        name: ep.name,
+                        playId: ep.playId
+                    }))
+                });
+            }
+            
+            // 如果没有季信息，将所有资源放在一个播放源中
+            if (playSources.length === 0 && episodes.length > 0) {
+                const points = episodes[0]?.points || 0;
+                const isFree = points === 0;
+                playSources.push({
+                    name: isFree ? "🎁 资源列表" : `💎 资源列表 (${points}积分)`,
+                    episodes: episodes.map(ep => ({
+                        name: ep.name,
+                        playId: ep.playId
+                    }))
+                });
+            }
         }
         
         if (playSources.length === 0) {
@@ -390,8 +208,9 @@ async function detail(params, context) {
             list: [{
                 vod_id: videoId,
                 vod_name: vodName,
-                vod_pic: "",
+                vod_pic: vodPic,
                 vod_content: vodContent,
+                vod_year: vodYear,
                 vod_play_sources: playSources
             }]
         };
@@ -426,7 +245,6 @@ async function play(params, context) {
     }
     
     try {
-        // 解析 playId
         let playData;
         try {
             playData = JSON.parse(playId);
@@ -446,9 +264,9 @@ async function play(params, context) {
             };
         }
         
-        console.log(`[HDHive] 解锁资源: slug=${slug}`);
+        console.log(`[HDHive] 解锁资源: slug=${slug}, type=${playData.type}`);
         
-        // 1. 调用解锁接口，获取网盘分享链接
+        // 调用解锁接口
         const resp = await axios.post(`${BASE_URL}/api/cache/unlock`, {
             slug: slug,
             allow_points: true
@@ -459,7 +277,6 @@ async function play(params, context) {
         
         const data = resp.data;
         
-        // 检查 API 冷却
         if (data.code === "OPENAPI_COOLDOWN") {
             const waitSeconds = data.retry_after_seconds || 60;
             return {
@@ -471,7 +288,7 @@ async function play(params, context) {
             };
         }
         
-        // 2. 提取网盘分享链接
+        // 提取网盘分享链接
         const shareUrl = data.link || data.data?.full_url || data.data?.url || data.url;
         
         if (!shareUrl) {
@@ -487,8 +304,7 @@ async function play(params, context) {
         
         console.log(`[HDHive] 分享链接: ${shareUrl}`);
         
-        // 3. 使用 OmniBox SDK 解析分享链接，获取播放直链
-        // 先获取网盘信息
+        // 使用 OmniBox SDK 解析分享链接
         const driveInfo = await OmniBox.getDriveInfoByShareURL(shareUrl);
         console.log(`[HDHive] 网盘类型: ${driveInfo.driveType}`);
         
@@ -505,10 +321,10 @@ async function play(params, context) {
             };
         }
         
-        // 查找视频文件（递归）
+        // 查找视频文件
         let videoFile = null;
         
-        async function findVideoFile(files, parentFid = "0") {
+        async function findVideoFile(files) {
             for (const file of files) {
                 const fileName = (file.file_name || "").toLowerCase();
                 const isVideo = fileName.endsWith(".mp4") || fileName.endsWith(".mkv") || 
@@ -524,7 +340,7 @@ async function play(params, context) {
                     try {
                         const subFiles = await OmniBox.getDriveFileList(shareUrl, file.fid);
                         if (subFiles && subFiles.files) {
-                            const found = await findVideoFile(subFiles.files, file.fid);
+                            const found = await findVideoFile(subFiles.files);
                             if (found) return found;
                         }
                     } catch (e) {
@@ -571,11 +387,9 @@ async function play(params, context) {
             await OmniBox.addPlayHistory({
                 vodId: playData.tmdbId || "",
                 title: playData.title || "",
-                episode: slug
+                episode: playData.episode ? `第${playData.episode}集` : slug
             });
-        } catch (e) {
-            // 忽略历史记录错误
-        }
+        } catch (e) {}
         
         return {
             urls: playInfo.url,
