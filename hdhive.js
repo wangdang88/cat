@@ -1,13 +1,23 @@
-// @name HDHive影视资源（115专版）
+// @name HDHive影视资源（稳定版）
 // @push 1
 // @author HDHive
-// @description 只显示115网盘资源，每个资源作为一个线路，支持多集
-// @version 1.1.0
+// @description 115网盘资源，每个资源一条线路，点击播放自动获取第一个视频
+// @version 1.2.0
 
-// ========== 配置 ==========
 const BASE_URL = "https://wd23-hdhive.hf.space";
 
-// 判断是否为115网盘资源
+// 安全请求函数
+async function safeRequest(url, options = {}) {
+    try {
+        const resp = await fetch(url, options);
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        return await resp.json();
+    } catch (e) {
+        console.error(`[HDHive] 请求失败: ${url}`, e);
+        throw e;
+    }
+}
+
 function is115Resource(res) {
     if (res.pan_type === "115") return true;
     const link = res.link || res.download_url || res.url || res.pan_url || "";
@@ -17,121 +27,60 @@ function is115Resource(res) {
     return false;
 }
 
-// 通用 POST 请求（使用 fetch，避免依赖 axios）
-async function postJson(url, data) {
-    const resp = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data)
-    });
-    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-    return resp.json();
-}
-
-// TMDB 映射（保持不变）
-const MOVIE_CATEGORIES = { popular: "🔥 热门电影", now_playing: "🎬 正在热映", top_rated: "⭐ 评分最高", upcoming: "📅 即将上映" };
-const TV_CATEGORIES = { popular: "🔥 热门剧集", airing_today: "📺 今日播出", on_the_air: "📡 正在播出", top_rated: "⭐ 评分最高" };
-const MOVIE_REGIONS = { movie_region_cn: "🇨🇳 国产电影", movie_region_us: "🇺🇸 美国电影", movie_region_jp: "🇯🇵 日本电影", movie_region_kr: "🇰🇷 韩国电影", movie_region_uk: "🇬🇧 英国电影", movie_region_fr: "🇫🇷 法国电影", movie_region_de: "🇩🇪 德国电影" };
-const TV_REGIONS = { cn: "🇨🇳 国产剧", us_eu: "🌍 欧美剧", jp: "🇯🇵 日剧", kr: "🇰🇷 韩剧", tw: "🇹🇼 台剧", hk: "🇭🇰 港剧", th: "🇹🇭 泰剧" };
-const MOVIE_GENRES = { movie_genre_28: "⚔️ 动作", movie_genre_12: "🧙 冒险", movie_genre_16: "🎨 动画", movie_genre_35: "😄 喜剧", movie_genre_80: "🔫 犯罪", movie_genre_99: "📹 纪录片", movie_genre_18: "📖 剧情", movie_genre_10751: "👨‍👩‍👧 家庭", movie_genre_14: "✨ 奇幻", movie_genre_36: "📜 历史", movie_genre_27: "👻 恐怖", movie_genre_10402: "🎵 音乐", movie_genre_9648: "🕵️ 悬疑", movie_genre_10749: "💕 爱情", movie_genre_878: "🚀 科幻", movie_genre_53: "⚡ 惊悚", movie_genre_10752: "⚔️ 战争", movie_genre_37: "🤠 西部" };
-const TV_GENRES = { genre_18: "📖 剧情", genre_35: "😄 喜剧", genre_10759: "⚔️ 动作冒险", genre_10765: "🚀 科幻奇幻", genre_9648: "🕵️ 悬疑", genre_10749: "💕 爱情", genre_99: "📹 纪录片", genre_16: "🎨 动画", genre_80: "🔫 犯罪", genre_10751: "👨‍👩‍👧 家庭" };
-const YEARS = Array.from({ length: 17 }, (_, i) => 2026 - i);
-
-function buildClassTree() {
-    const classes = [];
-    classes.push({ type_id: "movie", type_name: "🎬 电影", type_pid: "0" });
-    for (const [id, name] of Object.entries(MOVIE_CATEGORIES)) {
-        classes.push({ type_id: `movie|${id}`, type_name: name, type_pid: "movie" });
-    }
-    classes.push({ type_id: "movie_region", type_name: "🌍 电影地区", type_pid: "movie" });
-    for (const [id, name] of Object.entries(MOVIE_REGIONS)) {
-        classes.push({ type_id: `movie|${id}`, type_name: name, type_pid: "movie_region" });
-    }
-    classes.push({ type_id: "movie_year", type_name: "📅 电影年份", type_pid: "movie" });
-    for (const year of YEARS) {
-        classes.push({ type_id: `movie|year_${year}`, type_name: `${year}年`, type_pid: "movie_year" });
-    }
-    classes.push({ type_id: "movie_genre", type_name: "🎭 电影类型", type_pid: "movie" });
-    for (const [id, name] of Object.entries(MOVIE_GENRES)) {
-        classes.push({ type_id: `movie|${id}`, type_name: name, type_pid: "movie_genre" });
-    }
-    classes.push({ type_id: "tv", type_name: "📺 电视剧", type_pid: "0" });
-    for (const [id, name] of Object.entries(TV_CATEGORIES)) {
-        classes.push({ type_id: `tv|${id}`, type_name: name, type_pid: "tv" });
-    }
-    classes.push({ type_id: "tv_region", type_name: "🌍 剧集地区", type_pid: "tv" });
-    for (const [id, name] of Object.entries(TV_REGIONS)) {
-        classes.push({ type_id: `tv|${id}`, type_name: name, type_pid: "tv_region" });
-    }
-    classes.push({ type_id: "tv_year", type_name: "📅 剧集年份", type_pid: "tv" });
-    for (const year of YEARS) {
-        classes.push({ type_id: `tv|year_${year}`, type_name: `${year}年`, type_pid: "tv_year" });
-    }
-    classes.push({ type_id: "tv_genre", type_name: "🎭 剧集类型", type_pid: "tv" });
-    for (const [id, name] of Object.entries(TV_GENRES)) {
-        classes.push({ type_id: `tv|${id}`, type_name: name, type_pid: "tv_genre" });
-    }
-    return classes;
+// 简化版分类树（只保留最常用的几个分类，确保能显示）
+function getSimpleClassTree() {
+    return [
+        { type_id: "movie", type_name: "🎬 电影", type_pid: "0" },
+        { type_id: "movie|popular", type_name: "🔥 热门电影", type_pid: "movie" },
+        { type_id: "tv", type_name: "📺 电视剧", type_pid: "0" },
+        { type_id: "tv|popular", type_name: "🔥 热门剧集", type_pid: "tv" }
+    ];
 }
 
 async function home(params, context) {
     try {
-        const classes = buildClassTree();
-        const resp = await fetch(`${BASE_URL}/api/discover`, {
+        // 返回分类和首页推荐（电影前12部）
+        const resp = await safeRequest(`${BASE_URL}/api/discover`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ type: "movie", category: "popular", page: 1 })
         });
-        const data = await resp.json();
-        const list = (data.results || []).slice(0, 12).map(item => ({
+        const list = (resp.results || []).slice(0, 12).map(item => ({
             vod_id: `movie_${item.id}`,
             vod_name: item.title,
             vod_pic: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
-            vod_remarks: item.release_date ? item.release_date.slice(0, 4) : "未知"
+            vod_remarks: (item.release_date || "").slice(0, 4)
         }));
-        return { class: classes, list: list, filters: {} };
-    } catch (error) {
-        console.error("home error", error);
-        return { class: buildClassTree(), list: [], filters: {} };
+        return { class: getSimpleClassTree(), list: list, filters: {} };
+    } catch (e) {
+        console.error("home error", e);
+        return { class: getSimpleClassTree(), list: [], filters: {} };
     }
 }
 
 async function category(params, context) {
-    const categoryId = params.categoryId || params.id || "movie|popular";
+    const categoryId = params.categoryId || "movie|popular";
     const page = Number(params.page || 1);
     const parts = categoryId.split("|");
-    const type = parts[0] || "movie";
-    let subId = parts[1] || "popular";
+    const type = parts[0] === "tv" ? "tv" : "movie";
     try {
-        let requestParams = { type: type, page: page };
-        if (type === "movie") {
-            if (MOVIE_CATEGORIES[subId]) requestParams.category = subId;
-            else if (MOVIE_REGIONS[subId]) requestParams.filters = { region: subId };
-            else if (subId.startsWith("year_")) requestParams.filters = { year: parseInt(subId.replace("year_", "")) };
-            else if (MOVIE_GENRES[subId]) requestParams.filters = { genres: [parseInt(subId.replace("movie_genre_", ""))] };
-            else requestParams.category = "popular";
-        } else {
-            if (TV_CATEGORIES[subId]) requestParams.category = subId;
-            else if (TV_REGIONS[subId]) requestParams.filters = { region: subId };
-            else if (subId.startsWith("year_")) requestParams.filters = { year: parseInt(subId.replace("year_", "")) };
-            else if (TV_GENRES[subId]) requestParams.filters = { genres: [parseInt(subId.replace("genre_", ""))] };
-            else requestParams.category = "popular";
-        }
-        const resp = await fetch(`${BASE_URL}/api/discover`, {
+        const requestBody = { type: type, page: page };
+        if (type === "movie") requestBody.category = "popular";
+        else requestBody.category = "popular";
+        const resp = await safeRequest(`${BASE_URL}/api/discover`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(requestParams)
+            body: JSON.stringify(requestBody)
         });
-        const data = await resp.json();
-        const list = (data.results || []).map(item => ({
+        const list = (resp.results || []).map(item => ({
             vod_id: `${type}_${item.id}`,
             vod_name: item.title || item.name,
             vod_pic: item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "",
             vod_remarks: (item.release_date || item.first_air_date || "").slice(0, 4)
         }));
-        return { page: page, pagecount: data.total_pages || 1, total: data.total_results || list.length, list: list };
-    } catch (error) {
-        console.error("category error", error);
+        return { page: page, pagecount: resp.total_pages || 1, total: resp.total_results || list.length, list: list };
+    } catch (e) {
+        console.error("category error", e);
         return { page: page, pagecount: 0, total: 0, list: [] };
     }
 }
@@ -141,13 +90,12 @@ async function search(params, context) {
     const page = Number(params.page || 1);
     if (!wd) return { page: page, pagecount: 0, total: 0, list: [] };
     try {
-        const resp = await fetch(`${BASE_URL}/api/search`, {
+        const resp = await safeRequest(`${BASE_URL}/api/search`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ query: wd, page: page })
         });
-        const data = await resp.json();
-        const list = (data.results || []).map(item => {
+        const list = (resp.results || []).map(item => {
             const mediaType = item.media_type || (item.title ? "movie" : "tv");
             return {
                 vod_id: `${mediaType}_${item.id}`,
@@ -156,16 +104,14 @@ async function search(params, context) {
                 vod_remarks: (item.release_date || item.first_air_date || "").slice(0, 4)
             };
         });
-        return { page: page, pagecount: data.total_pages || 1, total: data.total_results || list.length, list: list };
-    } catch (error) {
-        console.error("search error", error);
+        return { page: page, pagecount: resp.total_pages || 1, total: resp.total_results || list.length, list: list };
+    } catch (e) {
+        console.error("search error", e);
         return { page: page, pagecount: 0, total: 0, list: [] };
     }
 }
 
-/**
- * 详情 - 修复文件列表获取失败问题
- */
+// 详情：每个资源一个线路，每个线路只有一个“播放”按钮（点击时自动播放第一个视频）
 async function detail(params, context) {
     const videoId = params.videoId || "";
     if (!videoId) return { list: [] };
@@ -174,98 +120,33 @@ async function detail(params, context) {
     const mediaType = parts[0];
     const tmdbId = parts[1];
     try {
-        const resp = await fetch(`${BASE_URL}/api/cache/resources/${mediaType}/${tmdbId}`);
-        const data = await resp.json();
-        const allResources = data.resources || [];
+        const resp = await safeRequest(`${BASE_URL}/api/cache/resources/${mediaType}/${tmdbId}`);
+        const allResources = resp.resources || [];
         const resources = allResources.filter(r => is115Resource(r));
-        console.log(`[HDHive] 详情: ${mediaType}/${tmdbId}, 115资源数=${resources.length}`);
-
         if (resources.length === 0) {
             return {
                 list: [{
                     vod_id: videoId,
-                    vod_name: `${mediaType === "movie" ? "电影" : "电视剧"} ${tmdbId} (暂无115资源)`,
+                    vod_name: `${mediaType === "movie" ? "电影" : "电视剧"} ${tmdbId}`,
                     vod_pic: "",
-                    vod_play_sources: [{ name: "📭 暂无115资源", episodes: [{ name: "该影片暂无115网盘资源", playId: "none" }] }]
+                    vod_play_sources: [{ name: "📭 暂无115资源", episodes: [{ name: "无资源", playId: "none" }] }]
                 }]
             };
         }
-
-        const playSources = [];
         const vodName = resources[0].title || resources[0].name || `${mediaType === "movie" ? "电影" : "电视剧"} ${tmdbId}`;
-
-        for (const r of resources) {
+        const playSources = resources.map(r => {
             const points = r.unlock_points || 0;
             const isFree = points === 0 || r.is_free_for_user === true;
             const sourceName = `${isFree ? "🎁 115免费" : `💎 115付费 (${points}积分)`} - ${r.title || r.name || "未命名"}`;
-            let episodes = [];
-
-            if (isFree) {
-                try {
-                    // 1. 解锁获取分享链接
-                    const unlockData = await postJson(`${BASE_URL}/api/cache/unlock`, { slug: r.slug, allow_points: true });
-                    let shareUrl = unlockData.link || unlockData.data?.full_url || unlockData.data?.url || unlockData.url;
-                    if (!shareUrl) throw new Error("未获取到分享链接");
-                    console.log(`[HDHive] 资源 ${r.slug} 分享链接: ${shareUrl}`);
-
-                    // 2. 获取文件列表（使用 /api/drive/file-list）
-                    const fileListData = await postJson(`/api/drive/file-list`, { share_url: shareUrl, path: "0" });
-                    const fileList = fileListData.files || [];
-                    if (fileList.length === 0) throw new Error("文件列表为空");
-
-                    // 递归收集所有视频文件
-                    const videoFiles = [];
-                    async function collectFiles(files) {
-                        for (const file of files) {
-                            const fileName = (file.file_name || "").toLowerCase();
-                            const isVideo = fileName.endsWith(".mp4") || fileName.endsWith(".mkv") || fileName.endsWith(".avi") || fileName.endsWith(".mov") || fileName.endsWith(".m3u8") || fileName.endsWith(".ts");
-                            if (isVideo) {
-                                videoFiles.push(file);
-                            }
-                            if (file.dir) {
-                                try {
-                                    const subResp = await postJson(`/api/drive/file-list`, { share_url: shareUrl, path: file.fid });
-                                    if (subResp && subResp.files) await collectFiles(subResp.files);
-                                } catch (e) { console.warn(`获取子目录失败: ${file.fid}`, e); }
-                            }
-                        }
-                    }
-                    await collectFiles(fileList);
-                    if (videoFiles.length === 0) throw new Error("未找到视频文件");
-
-                    videoFiles.sort((a, b) => (a.file_name || "").localeCompare(b.file_name || ""));
-                    episodes = videoFiles.map(file => ({
-                        name: file.file_name || "视频文件",
-                        playId: JSON.stringify({
-                            slug: r.slug,
-                            points: 0,
-                            shareUrl: shareUrl,
-                            fileId: file.fid || file.file_id,
-                            fileName: file.file_name,
-                            type: mediaType,
-                            tmdbId: tmdbId
-                        })
-                    }));
-                    console.log(`[HDHive] 资源 ${r.slug} 获取到 ${episodes.length} 个视频文件`);
-                } catch (err) {
-                    console.error(`[HDHive] 获取资源 ${r.slug} 剧集列表失败:`, err.message);
-                    // 降级：单集播放
-                    episodes = [{
-                        name: "直接播放（剧集列表获取失败）",
-                        playId: JSON.stringify({ slug: r.slug, points: 0, type: mediaType, tmdbId: tmdbId, fallback: true })
-                    }];
-                }
-            } else {
-                // 付费资源：单集
-                episodes = [{
+            // 每个资源只有一个剧集：点击时播放
+            return {
+                name: sourceName,
+                episodes: [{
                     name: "播放",
                     playId: JSON.stringify({ slug: r.slug, points: points, type: mediaType, tmdbId: tmdbId })
-                }];
-            }
-
-            playSources.push({ name: sourceName, episodes: episodes });
-        }
-
+                }]
+            };
+        });
         return {
             list: [{
                 vod_id: videoId,
@@ -274,87 +155,78 @@ async function detail(params, context) {
                 vod_play_sources: playSources
             }]
         };
-    } catch (error) {
-        console.error("detail error:", error.message);
+    } catch (e) {
+        console.error("detail error", e);
         return { list: [] };
     }
 }
 
-/**
- * 播放 - 支持直接播放指定的文件ID或自动匹配第一个视频
- */
+// 播放：解锁获取分享链接，然后获取第一个视频文件并播放
 async function play(params, context) {
     const playId = params.playId || "";
-    const flag = params.flag || "";
     if (!playId || playId === "none") {
-        return { urls: [], flag: flag, header: {}, parse: 0, msg: "无效的资源标识" };
+        return { urls: [], msg: "无效的资源标识" };
     }
+    let playData;
     try {
-        let playData;
-        try {
-            playData = JSON.parse(playId);
-        } catch (e) {
-            playData = { slug: playId, points: 0, type: "free" };
-        }
-        const slug = playData.slug;
-        if (!slug) return { urls: [], flag: flag, header: {}, parse: 0, msg: "资源标识无效" };
-        console.log(`[HDHive] 播放: slug=${slug}, 指定文件: ${playData.fileName || '自动匹配'}`);
-
-        // 获取分享链接
-        let shareUrl = playData.shareUrl;
-        if (!shareUrl) {
-            const unlockData = await postJson(`${BASE_URL}/api/cache/unlock`, { slug: slug, allow_points: true });
-            shareUrl = unlockData.link || unlockData.data?.full_url || unlockData.data?.url || unlockData.url;
-            if (!shareUrl) return { urls: [], flag: flag, header: {}, parse: 0, msg: "未获取到分享链接" };
-        }
-        console.log(`[HDHive] 分享链接: ${shareUrl}`);
-
-        let fileId = playData.fileId;
-        if (!fileId) {
-            // 获取文件列表并取第一个视频文件
-            const fileListData = await postJson(`/api/drive/file-list`, { share_url: shareUrl, path: "0" });
-            const fileList = fileListData.files || [];
-            if (fileList.length === 0) return { urls: [], flag: shareUrl, header: {}, parse: 0, msg: "网盘中没有文件" };
-
-            // 递归查找第一个视频文件
-            async function findFirstVideoFile(files) {
-                for (const file of files) {
-                    const fileName = (file.file_name || "").toLowerCase();
-                    const isVideo = fileName.endsWith(".mp4") || fileName.endsWith(".mkv") || fileName.endsWith(".avi") || fileName.endsWith(".mov") || fileName.endsWith(".m3u8") || fileName.endsWith(".ts");
-                    if (isVideo) return file;
-                    if (file.dir) {
-                        try {
-                            const subResp = await postJson(`/api/drive/file-list`, { share_url: shareUrl, path: file.fid });
-                            if (subResp && subResp.files) {
-                                const found = await findFirstVideoFile(subResp.files);
-                                if (found) return found;
-                            }
-                        } catch (e) {}
-                    }
+        playData = JSON.parse(playId);
+    } catch (e) {
+        playData = { slug: playId, points: 0 };
+    }
+    const slug = playData.slug;
+    if (!slug) return { urls: [], msg: "资源标识无效" };
+    try {
+        // 1. 解锁获取分享链接
+        const unlockData = await safeRequest(`${BASE_URL}/api/cache/unlock`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ slug: slug, allow_points: true })
+        });
+        const shareUrl = unlockData.link || unlockData.data?.full_url || unlockData.data?.url || unlockData.url;
+        if (!shareUrl) return { urls: [], msg: "未获取到分享链接" };
+        // 2. 获取文件列表
+        const fileListData = await safeRequest(`/api/drive/file-list`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ share_url: shareUrl, path: "0" })
+        });
+        const files = fileListData.files || [];
+        if (files.length === 0) return { urls: [], msg: "网盘无文件" };
+        // 递归查找第一个视频文件
+        async function findFirstVideo(filesList) {
+            for (const f of filesList) {
+                const name = (f.file_name || "").toLowerCase();
+                const isVideo = name.endsWith(".mp4") || name.endsWith(".mkv") || name.endsWith(".avi") || name.endsWith(".mov") || name.endsWith(".m3u8") || name.endsWith(".ts");
+                if (isVideo) return f;
+                if (f.dir) {
+                    try {
+                        const subRes = await safeRequest(`/api/drive/file-list`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ share_url: shareUrl, path: f.fid })
+                        });
+                        if (subRes.files) {
+                            const found = await findFirstVideo(subRes.files);
+                            if (found) return found;
+                        }
+                    } catch (e) {}
                 }
-                return null;
             }
-            const videoFile = await findFirstVideoFile(fileList);
-            if (!videoFile) return { urls: [], flag: shareUrl, header: {}, parse: 0, msg: "未找到视频文件" };
-            fileId = videoFile.fid || videoFile.file_id;
-            console.log(`[HDHive] 自动匹配视频文件: ${videoFile.file_name}`);
+            return null;
         }
-
-        // 获取播放地址
-        const playInfo = await postJson(`/api/drive/video-play`, { share_url: shareUrl, file_id: fileId });
-        if (!playInfo || !playInfo.url || playInfo.url.length === 0) {
-            return { urls: [], flag: shareUrl, header: {}, parse: 0, msg: "获取播放地址失败" };
-        }
-
-        return {
-            urls: playInfo.url,
-            flag: shareUrl,
-            header: playInfo.header || {},
-            parse: playInfo.parse || 0
-        };
-    } catch (error) {
-        console.error("[HDHive] 播放错误:", error.message);
-        return { urls: [], flag: flag, header: {}, parse: 0, msg: error.message };
+        const videoFile = await findFirstVideo(files);
+        if (!videoFile) return { urls: [], msg: "未找到视频文件" };
+        // 3. 获取播放地址
+        const playInfo = await safeRequest(`/api/drive/video-play`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ share_url: shareUrl, file_id: videoFile.fid || videoFile.file_id })
+        });
+        if (!playInfo.url || playInfo.url.length === 0) return { urls: [], msg: "获取播放地址失败" };
+        return { urls: playInfo.url, header: playInfo.header || {}, parse: playInfo.parse || 0 };
+    } catch (e) {
+        console.error("play error", e);
+        return { urls: [], msg: e.message };
     }
 }
 
